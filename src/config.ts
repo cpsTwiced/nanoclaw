@@ -73,10 +73,8 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
 );
 export const NANOCLAW_MODEL =
   process.env.NANOCLAW_MODEL || envConfig.NANOCLAW_MODEL;
-export const CODEX_MODEL =
-  process.env.CODEX_MODEL || envConfig.CODEX_MODEL;
-export const CODEX_EFFORT =
-  process.env.CODEX_EFFORT || envConfig.CODEX_EFFORT;
+export const CODEX_MODEL = process.env.CODEX_MODEL || envConfig.CODEX_MODEL;
+export const CODEX_EFFORT = process.env.CODEX_EFFORT || envConfig.CODEX_EFFORT;
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
