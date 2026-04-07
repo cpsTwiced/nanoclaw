@@ -435,6 +435,8 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const modelEnv = process.env.NANOCLAW_MODEL as 'sonnet' | 'opus' | 'haiku' | undefined;
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -442,6 +444,7 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
+      ...(modelEnv ? { model: modelEnv } : {}),
       systemPrompt: globalClaudeMd
         ? {
             type: 'preset' as const,

@@ -13,6 +13,7 @@ import {
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  NANOCLAW_MODEL,
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
@@ -251,6 +252,11 @@ async function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+
+  // Forward model preference to the agent runner
+  if (NANOCLAW_MODEL) {
+    args.push('-e', `NANOCLAW_MODEL=${NANOCLAW_MODEL}`);
+  }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
   // The gateway intercepts HTTPS traffic and injects API keys or OAuth tokens.

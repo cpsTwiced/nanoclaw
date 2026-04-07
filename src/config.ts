@@ -10,6 +10,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'ONECLI_URL',
   'TZ',
+  'NANOCLAW_MODEL',
 ]);
 
 export const ASSISTANT_NAME =
@@ -68,6 +69,8 @@ export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,
   parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
+export const NANOCLAW_MODEL =
+  process.env.NANOCLAW_MODEL || envConfig.NANOCLAW_MODEL;
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
