@@ -29,9 +29,7 @@ afterEach(() => {
 
 describe('loadTriggerOverrides', () => {
   it('returns empty config when file does not exist', () => {
-    const cfg = loadTriggerOverrides(
-      path.join(tmpDir, 'nonexistent.json'),
-    );
+    const cfg = loadTriggerOverrides(path.join(tmpDir, 'nonexistent.json'));
     expect(cfg).toEqual({ chats: {} });
   });
 

@@ -2,10 +2,7 @@ import fs from 'fs';
 
 import { TRIGGER_OVERRIDES_PATH } from './config.js';
 import { logger } from './logger.js';
-import {
-  isTriggerAllowed,
-  loadSenderAllowlist,
-} from './sender-allowlist.js';
+import { isTriggerAllowed, loadSenderAllowlist } from './sender-allowlist.js';
 import { NewMessage } from './types.js';
 
 export interface TriggerOverrideEntry {
@@ -152,9 +149,7 @@ export function removeExemptSender(chatJid: string, sender: string): boolean {
 }
 
 /** List all exemptions, optionally filtered by chat. */
-export function listExemptSenders(
-  chatJid?: string,
-): Record<string, string[]> {
+export function listExemptSenders(chatJid?: string): Record<string, string[]> {
   const config = loadTriggerOverrides();
   if (chatJid) {
     const entry = config.chats[chatJid];
