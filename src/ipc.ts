@@ -3,7 +3,12 @@ import path from 'path';
 
 import { CronExpressionParser } from 'cron-parser';
 
-import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
+import {
+  DATA_DIR,
+  IPC_POLL_INTERVAL,
+  TIMEZONE,
+  setBotConversationLimit,
+} from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
@@ -180,6 +185,8 @@ export async function processTaskIpc(
     containerConfig?: RegisteredGroup['containerConfig'];
     // For trigger overrides
     sender?: string;
+    // For bot conversation limit
+    limit?: number;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -515,6 +522,25 @@ export async function processTaskIpc(
 
     case 'list_trigger_exemptions':
       // Handled in the container MCP server by reading the config file.
+      break;
+
+    case 'set_bot_conversation_limit':
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized set_bot_conversation_limit attempt blocked',
+        );
+        break;
+      }
+      if (typeof data.limit === 'number' && data.limit >= 1) {
+        setBotConversationLimit(data.limit);
+        logger.info({ limit: data.limit }, 'Bot conversation limit updated');
+      } else {
+        logger.warn(
+          { data },
+          'Invalid set_bot_conversation_limit request - limit must be a number >= 1',
+        );
+      }
       break;
 
     default:

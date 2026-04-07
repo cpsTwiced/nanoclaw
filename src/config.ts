@@ -13,6 +13,9 @@ const envConfig = readEnvFile([
   'NANOCLAW_MODEL',
   'CODEX_MODEL',
   'CODEX_EFFORT',
+  'DISCORD_CODEX_BOT_TOKEN',
+  'CODEX_ASSISTANT_NAME',
+  'BOT_CONVERSATION_LIMIT',
 ]);
 
 export const ASSISTANT_NAME =
@@ -75,6 +78,23 @@ export const NANOCLAW_MODEL =
   process.env.NANOCLAW_MODEL || envConfig.NANOCLAW_MODEL;
 export const CODEX_MODEL = process.env.CODEX_MODEL || envConfig.CODEX_MODEL;
 export const CODEX_EFFORT = process.env.CODEX_EFFORT || envConfig.CODEX_EFFORT;
+export const CODEX_ASSISTANT_NAME =
+  process.env.CODEX_ASSISTANT_NAME || envConfig.CODEX_ASSISTANT_NAME || 'Codex';
+
+// Bot-to-bot conversation turn limit (mutable so IPC can update at runtime)
+export let botConversationLimit = Math.max(
+  1,
+  parseInt(
+    process.env.BOT_CONVERSATION_LIMIT ||
+      envConfig.BOT_CONVERSATION_LIMIT ||
+      '10',
+    10,
+  ) || 10,
+);
+
+export function setBotConversationLimit(limit: number): void {
+  botConversationLimit = Math.max(1, limit);
+}
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

@@ -6,7 +6,11 @@ import {
   TextChannel,
 } from 'discord.js';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  CODEX_ASSISTANT_NAME,
+  botConversationLimit,
+} from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -24,14 +28,27 @@ export interface DiscordChannelOpts {
 }
 
 export class DiscordChannel implements Channel {
-  name = 'discord';
+  name: string;
 
   private client: Client | null = null;
   private opts: DiscordChannelOpts;
   private botToken: string;
+  private jidPrefix: string;
+  private triggerName: string;
+  // Bot-to-bot turn counter per channel (reset on human message)
+  private botTurnCounts = new Map<string, number>();
 
-  constructor(botToken: string, opts: DiscordChannelOpts) {
+  constructor(
+    botToken: string,
+    jidPrefix: string,
+    triggerName: string,
+    channelName: string,
+    opts: DiscordChannelOpts,
+  ) {
     this.botToken = botToken;
+    this.jidPrefix = jidPrefix;
+    this.triggerName = triggerName;
+    this.name = channelName;
     this.opts = opts;
   }
 
@@ -46,11 +63,39 @@ export class DiscordChannel implements Channel {
     });
 
     this.client.on(Events.MessageCreate, async (message: Message) => {
-      // Ignore bot messages (including own)
-      if (message.author.bot) return;
+      const isOwnMessage =
+        this.client?.user && message.author.id === this.client.user.id;
+      if (isOwnMessage) return;
 
       const channelId = message.channelId;
-      const chatJid = `dc:${channelId}`;
+
+      // Bot-to-bot turn tracking
+      if (message.author.bot) {
+        // Only allow bot messages that @mention this bot
+        const botId = this.client?.user?.id;
+        if (!botId) return;
+        const mentionsMe =
+          message.mentions.users.has(botId) ||
+          message.content.includes(`<@${botId}>`) ||
+          message.content.includes(`<@!${botId}>`);
+        if (!mentionsMe) return;
+
+        // Check turn cap
+        const turns = this.botTurnCounts.get(channelId) || 0;
+        if (turns >= botConversationLimit) {
+          logger.info(
+            { channelId, turns, limit: botConversationLimit },
+            'Bot-to-bot conversation limit reached, ignoring',
+          );
+          return;
+        }
+        this.botTurnCounts.set(channelId, turns + 1);
+      } else {
+        // Human message resets the counter
+        this.botTurnCounts.set(channelId, 0);
+      }
+
+      const chatJid = `${this.jidPrefix}${channelId}`;
       let content = message.content;
       const timestamp = message.createdAt.toISOString();
       const senderName =
@@ -69,9 +114,9 @@ export class DiscordChannel implements Channel {
         chatName = senderName;
       }
 
-      // Translate Discord @bot mentions into TRIGGER_PATTERN format.
+      // Translate Discord @bot mentions into trigger format.
       // Discord mentions look like <@botUserId> — these won't match
-      // TRIGGER_PATTERN (e.g., ^@Andy\b), so we prepend the trigger
+      // the group's trigger pattern, so we prepend the trigger name
       // when the bot is @mentioned.
       if (this.client?.user) {
         const botId = this.client.user.id;
@@ -85,9 +130,13 @@ export class DiscordChannel implements Channel {
           content = content
             .replace(new RegExp(`<@!?${botId}>`, 'g'), '')
             .trim();
-          // Prepend trigger if not already present
-          if (!TRIGGER_PATTERN.test(content)) {
-            content = `@${ASSISTANT_NAME} ${content}`;
+          // Prepend trigger using this channel's trigger name
+          const triggerPattern = new RegExp(
+            `^@${this.triggerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+            'i',
+          );
+          if (!triggerPattern.test(content)) {
+            content = `@${this.triggerName} ${content}`;
           }
         }
       }
@@ -137,7 +186,7 @@ export class DiscordChannel implements Channel {
         chatJid,
         timestamp,
         chatName,
-        'discord',
+        this.name,
         isGroup,
       );
 
@@ -197,7 +246,7 @@ export class DiscordChannel implements Channel {
     }
 
     try {
-      const channelId = jid.replace(/^dc:/, '');
+      const channelId = jid.replace(/^dc\d?:/, '');
       const channel = await this.client.channels.fetch(channelId);
 
       if (!channel || !('send' in channel)) {
@@ -227,7 +276,7 @@ export class DiscordChannel implements Channel {
   }
 
   ownsJid(jid: string): boolean {
-    return jid.startsWith('dc:');
+    return jid.startsWith(this.jidPrefix);
   }
 
   async disconnect(): Promise<void> {
@@ -241,7 +290,7 @@ export class DiscordChannel implements Channel {
   async setTyping(jid: string, isTyping: boolean): Promise<void> {
     if (!this.client || !isTyping) return;
     try {
-      const channelId = jid.replace(/^dc:/, '');
+      const channelId = jid.replace(/^dc\d?:/, '');
       const channel = await this.client.channels.fetch(channelId);
       if (channel && 'sendTyping' in channel) {
         await (channel as TextChannel).sendTyping();
@@ -260,5 +309,24 @@ registerChannel('discord', (opts: ChannelOpts) => {
     logger.warn('Discord: DISCORD_BOT_TOKEN not set');
     return null;
   }
-  return new DiscordChannel(token, opts);
+  return new DiscordChannel(token, 'dc:', ASSISTANT_NAME, 'discord', opts);
+});
+
+registerChannel('discord-codex', (opts: ChannelOpts) => {
+  const envVars = readEnvFile([
+    'DISCORD_CODEX_BOT_TOKEN',
+    'CODEX_ASSISTANT_NAME',
+  ]);
+  const token =
+    process.env.DISCORD_CODEX_BOT_TOKEN ||
+    envVars.DISCORD_CODEX_BOT_TOKEN ||
+    '';
+  if (!token) return null;
+  return new DiscordChannel(
+    token,
+    'dc2:',
+    CODEX_ASSISTANT_NAME,
+    'discord-codex',
+    opts,
+  );
 });
