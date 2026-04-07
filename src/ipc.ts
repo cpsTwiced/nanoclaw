@@ -9,6 +9,11 @@ import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
+import {
+  addExemptSender,
+  listExemptSenders,
+  removeExemptSender,
+} from './trigger-overrides.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -173,6 +178,8 @@ export async function processTaskIpc(
     trigger?: string;
     requiresTrigger?: boolean;
     containerConfig?: RegisteredGroup['containerConfig'];
+    // For trigger overrides
+    sender?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -460,6 +467,54 @@ export async function processTaskIpc(
           'Invalid register_group request - missing required fields',
         );
       }
+      break;
+
+    case 'add_trigger_exempt':
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized add_trigger_exempt attempt blocked',
+        );
+        break;
+      }
+      if (data.jid && data.sender) {
+        const added = addExemptSender(data.jid, data.sender);
+        logger.info(
+          { chatJid: data.jid, sender: data.sender, added },
+          'trigger-overrides: add exempt sender',
+        );
+      } else {
+        logger.warn(
+          { data },
+          'Invalid add_trigger_exempt request - missing jid or sender',
+        );
+      }
+      break;
+
+    case 'remove_trigger_exempt':
+      if (!isMain) {
+        logger.warn(
+          { sourceGroup },
+          'Unauthorized remove_trigger_exempt attempt blocked',
+        );
+        break;
+      }
+      if (data.jid && data.sender) {
+        const removed = removeExemptSender(data.jid, data.sender);
+        logger.info(
+          { chatJid: data.jid, sender: data.sender, removed },
+          'trigger-overrides: remove exempt sender',
+        );
+      } else {
+        logger.warn(
+          { data },
+          'Invalid remove_trigger_exempt request - missing jid or sender',
+        );
+      }
+      break;
+
+    case 'list_trigger_exemptions':
+      // Handled in the container MCP server by reading the config file.
       break;
 
     default:
