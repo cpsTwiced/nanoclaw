@@ -443,6 +443,173 @@ server.tool(
 );
 
 server.tool(
+  'add_trigger_exempt',
+  'Add a sender to the trigger-exempt list for a group. Exempt senders bypass the @trigger requirement — their messages are always processed. Main group only.',
+  {
+    chat_jid: z
+      .string()
+      .describe('The chat JID to add the exemption for'),
+    sender_id: z.string().describe('The sender ID to exempt from trigger'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can manage trigger exemptions.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'add_trigger_exempt',
+      jid: args.chat_jid,
+      sender: args.sender_id,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Trigger exemption added: sender "${args.sender_id}" in chat "${args.chat_jid}" no longer needs a trigger word.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'remove_trigger_exempt',
+  'Remove a sender from the trigger-exempt list for a group. Main group only.',
+  {
+    chat_jid: z
+      .string()
+      .describe('The chat JID to remove the exemption from'),
+    sender_id: z
+      .string()
+      .describe('The sender ID to remove from trigger exemptions'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can manage trigger exemptions.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'remove_trigger_exempt',
+      jid: args.chat_jid,
+      sender: args.sender_id,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Trigger exemption removed for sender "${args.sender_id}" in chat "${args.chat_jid}".`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  'list_trigger_exemptions',
+  'List all trigger-exempt senders, optionally filtered by chat JID. Main group only.',
+  {
+    chat_jid: z
+      .string()
+      .optional()
+      .describe(
+        'Optional: filter to a specific chat JID. Omit to list all exemptions.',
+      ),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can view trigger exemptions.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    // Read the trigger-overrides config file directly
+    const possiblePaths = [
+      path.join(process.env.HOME || '/root', '.config', 'nanoclaw', 'trigger-overrides.json'),
+    ];
+
+    let config: { chats: Record<string, { exemptSenders: string[] }> } = {
+      chats: {},
+    };
+
+    for (const p of possiblePaths) {
+      try {
+        config = JSON.parse(fs.readFileSync(p, 'utf-8'));
+        break;
+      } catch {
+        // Try next path
+      }
+    }
+
+    const chats = args.chat_jid
+      ? { [args.chat_jid]: config.chats?.[args.chat_jid] }
+      : config.chats || {};
+
+    const entries = Object.entries(chats).filter(
+      ([, v]) => v?.exemptSenders?.length,
+    );
+
+    if (entries.length === 0) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: args.chat_jid
+              ? `No trigger exemptions found for chat "${args.chat_jid}".`
+              : 'No trigger exemptions configured.',
+          },
+        ],
+      };
+    }
+
+    const formatted = entries
+      .map(
+        ([jid, entry]) =>
+          `• ${jid}: ${entry.exemptSenders.join(', ')}`,
+      )
+      .join('\n');
+
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Trigger exemptions:\n${formatted}`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
   'register_group',
   `Register a new chat/group so the agent can respond to messages there. Main group only.
 
