@@ -2,6 +2,11 @@ import fs from 'fs';
 
 import { TRIGGER_OVERRIDES_PATH } from './config.js';
 import { logger } from './logger.js';
+import {
+  isTriggerAllowed,
+  loadSenderAllowlist,
+} from './sender-allowlist.js';
+import { NewMessage } from './types.js';
 
 export interface TriggerOverrideEntry {
   exemptSenders: string[];
@@ -77,6 +82,26 @@ export function isTriggerExempt(chatJid: string, sender: string): boolean {
   const entry = cachedConfig.chats[chatJid];
   if (!entry) return false;
   return entry.exemptSenders.includes(sender);
+}
+
+/**
+ * Check whether any message in a batch should activate the agent.
+ * Returns true if at least one message is from self, from an exempt sender,
+ * or matches the trigger pattern from an allowed sender.
+ */
+export function hasTriggerMatch(
+  chatJid: string,
+  messages: NewMessage[],
+  triggerPattern: RegExp,
+): boolean {
+  const allowlistCfg = loadSenderAllowlist();
+  return messages.some(
+    (m) =>
+      m.is_from_me ||
+      isTriggerExempt(chatJid, m.sender) ||
+      (triggerPattern.test(m.content.trim()) &&
+        isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
+  );
 }
 
 /** Force reload from disk. */

@@ -57,11 +57,10 @@ import {
 } from './remote-control.js';
 import {
   isSenderAllowed,
-  isTriggerAllowed,
   loadSenderAllowlist,
   shouldDropMessage,
 } from './sender-allowlist.js';
-import { isTriggerExempt } from './trigger-overrides.js';
+import { hasTriggerMatch } from './trigger-overrides.js';
 import { startSessionCleanup } from './session-cleanup.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -243,15 +242,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
     const triggerPattern = getTriggerPattern(group.trigger);
-    const allowlistCfg = loadSenderAllowlist();
-    const hasTrigger = missedMessages.some(
-      (m) =>
-        m.is_from_me ||
-        isTriggerExempt(chatJid, m.sender) ||
-        (triggerPattern.test(m.content.trim()) &&
-          isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
-    );
-    if (!hasTrigger) return true;
+    if (!hasTriggerMatch(chatJid, missedMessages, triggerPattern)) return true;
   }
 
   const prompt = formatMessages(missedMessages, TIMEZONE);
@@ -495,15 +486,8 @@ async function startMessageLoop(): Promise<void> {
           // context when a trigger eventually arrives.
           if (needsTrigger) {
             const triggerPattern = getTriggerPattern(group.trigger);
-            const allowlistCfg = loadSenderAllowlist();
-            const hasTrigger = groupMessages.some(
-              (m) =>
-                m.is_from_me ||
-                isTriggerExempt(chatJid, m.sender) ||
-                (triggerPattern.test(m.content.trim()) &&
-                  isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
-            );
-            if (!hasTrigger) continue;
+            if (!hasTriggerMatch(chatJid, groupMessages, triggerPattern))
+              continue;
           }
 
           // Pull all messages since lastAgentTimestamp so non-trigger
