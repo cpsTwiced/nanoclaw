@@ -75,6 +75,11 @@ No `##` headings. No `[links](url)`. No `**double stars**`.
 
 Standard Markdown works: `**bold**`, `*italic*`, `[links](url)`, `# headings`.
 
+### Discord mentions
+
+To mention/tag the user in Discord, use their Discord user ID format:
+- michh: `<@159083215024291840>`
+
 ---
 
 ## Task Scripts
