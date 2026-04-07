@@ -23,6 +23,10 @@ import {
   PreCompactHookInput,
 } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import {
+  CodexAppServerClient,
+  type AppServerInputItem,
+} from './app-server-client.js';
 
 interface ContainerInput {
   prompt: string;
@@ -33,6 +37,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  agentType?: 'claude-code' | 'codex';
 }
 
 interface ContainerOutput {
@@ -603,6 +608,171 @@ async function runScript(script: string): Promise<ScriptResult | null> {
   });
 }
 
+/**
+ * Run a Codex session using the app-server JSON-RPC protocol.
+ * Mirrors the Claude query loop: run turn → wait for IPC → run next turn.
+ */
+async function runCodexSession(
+  containerInput: ContainerInput,
+  initialPrompt: string,
+): Promise<void> {
+  const codexModel = process.env.CODEX_MODEL || undefined;
+  const codexEffort = process.env.CODEX_EFFORT || undefined;
+  const effectiveCwd = '/workspace/group';
+
+  const client = new CodexAppServerClient({
+    cwd: effectiveCwd,
+    env: process.env as NodeJS.ProcessEnv,
+    log,
+  });
+
+  await client.start();
+
+  let threadId: string | undefined;
+  try {
+    // Start or resume thread
+    try {
+      threadId = await client.startOrResumeThread(containerInput.sessionId, {
+        cwd: effectiveCwd,
+        model: codexModel,
+      });
+      log(
+        containerInput.sessionId
+          ? `Codex thread resumed (${threadId})`
+          : `Codex thread started (${threadId})`,
+      );
+    } catch (err) {
+      if (!containerInput.sessionId) throw err;
+      log(
+        `Codex resume failed, starting new thread: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      threadId = await client.startOrResumeThread(undefined, {
+        cwd: effectiveCwd,
+        model: codexModel,
+      });
+      log(`Codex thread restarted (${threadId})`);
+    }
+
+    let prompt = initialPrompt;
+
+    // Query loop: run turn → wait for IPC → run next turn
+    while (true) {
+      log(`Starting Codex turn (thread: ${threadId})...`);
+
+      const input: AppServerInputItem[] = [{ type: 'text', text: prompt }];
+
+      const activeTurn = await client.startTurn(threadId, input, {
+        cwd: effectiveCwd,
+        model: codexModel,
+        effort: codexEffort,
+      });
+
+      // Poll IPC for follow-ups and _close sentinel during the turn
+      let polling = true;
+      let closedDuringTurn = false;
+
+      const pollDuringTurn = async () => {
+        if (!polling) return;
+
+        if (shouldClose()) {
+          log('Close sentinel detected during Codex turn, interrupting');
+          closedDuringTurn = true;
+          polling = false;
+          try {
+            await activeTurn.interrupt();
+          } catch (err) {
+            log(
+              `Failed to interrupt turn: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+          return;
+        }
+
+        const messages = drainIpcInput();
+        if (messages.length > 0) {
+          const merged = messages.join('\n');
+          log(`Steering Codex turn with ${messages.length} queued message(s)`);
+          try {
+            await activeTurn.steer([{ type: 'text', text: merged }]);
+          } catch (err) {
+            log(
+              `turn/steer failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
+
+        setTimeout(() => void pollDuringTurn(), IPC_POLL_MS);
+      };
+      setTimeout(() => void pollDuringTurn(), IPC_POLL_MS);
+
+      try {
+        const { state, result } = await activeTurn.wait();
+
+        if (state.status === 'completed' || closedDuringTurn) {
+          if (result) {
+            writeOutput({
+              status: 'success',
+              result,
+              newSessionId: threadId,
+            });
+          } else {
+            writeOutput({
+              status: 'success',
+              result: null,
+              newSessionId: threadId,
+            });
+          }
+        } else if (state.status === 'interrupted' && !closedDuringTurn) {
+          // Retry once on unexpected interruption
+          log('Codex turn interrupted unexpectedly, emitting partial result');
+          writeOutput({
+            status: 'success',
+            result: result || null,
+            newSessionId: threadId,
+          });
+        } else {
+          writeOutput({
+            status: 'error',
+            result: result || null,
+            newSessionId: threadId,
+            error:
+              state.errorMessage ||
+              `Codex turn finished with status ${state.status}`,
+          });
+        }
+      } finally {
+        polling = false;
+      }
+
+      if (closedDuringTurn) {
+        log('Close sentinel consumed during turn, exiting');
+        break;
+      }
+
+      // Emit session update
+      writeOutput({ status: 'success', result: null, newSessionId: threadId });
+
+      log('Codex turn ended, waiting for next IPC message...');
+      const nextMessage = await waitForIpcMessage();
+      if (nextMessage === null) {
+        log('Close sentinel received, exiting Codex session');
+        break;
+      }
+
+      log(`Got new message (${nextMessage.length} chars), starting new turn`);
+      prompt = nextMessage;
+    }
+  } finally {
+    await client.close();
+  }
+}
+
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
 
@@ -677,7 +847,25 @@ async function main(): Promise<void> {
     prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptResult.data, null, 2)}\n\nInstructions:\n${containerInput.prompt}`;
   }
 
-  // Query loop: run query → wait for IPC message → run new query → repeat
+  // Route to Codex runner if agent type is codex
+  if (containerInput.agentType === 'codex') {
+    log('Agent type: codex — using Codex app-server runtime');
+    try {
+      await runCodexSession(containerInput, prompt);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      log(`Codex session error: ${errorMessage}`);
+      writeOutput({
+        status: 'error',
+        result: null,
+        error: errorMessage,
+      });
+      process.exit(1);
+    }
+    return;
+  }
+
+  // Claude query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
   try {
     while (true) {

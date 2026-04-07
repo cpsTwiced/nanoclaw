@@ -4,9 +4,12 @@
  */
 import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
+  CODEX_EFFORT,
+  CODEX_MODEL,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -44,6 +47,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  agentType?: 'claude-code' | 'codex';
 }
 
 export interface ContainerOutput {
@@ -230,6 +234,59 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Codex-specific setup: mount ~/.codex/ auth, write AGENTS.md and config.toml
+  if (group.agentType === 'codex') {
+    const hostCodexDir = path.join(os.homedir(), '.codex');
+    const sessionCodexDir = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      '.codex',
+    );
+    fs.mkdirSync(sessionCodexDir, { recursive: true });
+
+    // Copy auth.json from host ~/.codex/ into session dir
+    const hostAuth = path.join(hostCodexDir, 'auth.json');
+    if (fs.existsSync(hostAuth)) {
+      fs.copyFileSync(hostAuth, path.join(sessionCodexDir, 'auth.json'));
+    } else {
+      logger.warn(
+        { group: group.name },
+        'Codex auth.json not found at ~/.codex/auth.json — run `codex login` on the host',
+      );
+    }
+
+    // Write AGENTS.md from group's CLAUDE.md (Codex reads AGENTS.md for instructions)
+    const groupClaudeMd = path.join(
+      resolveGroupFolderPath(group.folder),
+      'CLAUDE.md',
+    );
+    if (fs.existsSync(groupClaudeMd)) {
+      const content = fs.readFileSync(groupClaudeMd, 'utf-8');
+      fs.writeFileSync(path.join(sessionCodexDir, 'AGENTS.md'), content);
+    }
+
+    // Write config.toml with MCP server config so Codex can use NanoClaw tools
+    const mcpServerPath = '/tmp/dist/ipc-mcp-stdio.js';
+    const configToml = [
+      '[mcp_servers.nanoclaw]',
+      'command = "node"',
+      `args = ["${mcpServerPath}"]`,
+      '',
+      '[mcp_servers.nanoclaw.env]',
+      `NANOCLAW_CHAT_JID = "${group.folder}"`,
+      `NANOCLAW_GROUP_FOLDER = "${group.folder}"`,
+      `NANOCLAW_IS_MAIN = "${isMain ? '1' : '0'}"`,
+    ].join('\n');
+    fs.writeFileSync(path.join(sessionCodexDir, 'config.toml'), configToml);
+
+    mounts.push({
+      hostPath: sessionCodexDir,
+      containerPath: '/home/node/.codex',
+      readonly: false,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -247,6 +304,7 @@ async function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
   agentIdentifier?: string,
+  agentType?: string,
 ): Promise<string[]> {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -256,6 +314,18 @@ async function buildContainerArgs(
   // Forward model preference to the agent runner
   if (NANOCLAW_MODEL) {
     args.push('-e', `NANOCLAW_MODEL=${NANOCLAW_MODEL}`);
+  }
+
+  // Codex-specific environment variables
+  if (agentType === 'codex') {
+    args.push('-e', 'NANOCLAW_AGENT_TYPE=codex');
+    args.push('-e', 'CODEX_HOME=/home/node/.codex');
+    if (CODEX_MODEL) {
+      args.push('-e', `CODEX_MODEL=${CODEX_MODEL}`);
+    }
+    if (CODEX_EFFORT) {
+      args.push('-e', `CODEX_EFFORT=${CODEX_EFFORT}`);
+    }
   }
 
   // OneCLI gateway handles credential injection — containers never see real secrets.
@@ -317,10 +387,12 @@ export async function runContainerAgent(
   const agentIdentifier = input.isMain
     ? undefined
     : group.folder.toLowerCase().replace(/_/g, '-');
+  const agentType = group.agentType || 'claude-code';
   const containerArgs = await buildContainerArgs(
     mounts,
     containerName,
     agentIdentifier,
+    agentType,
   );
 
   logger.debug(
