@@ -285,7 +285,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           ? result.result
           : JSON.stringify(result.result);
       // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      let text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+      // Codex cleanup: strip echoed "Sent:" prefix and unwrap code-block wrapping
+      if (group.agentType === 'codex') {
+        text = text
+          .replace(/^Sent:\s*/i, '')
+          .replace(/^Sent\s+/i, '')
+          .trim();
+        // Strip triple-backtick wrapping (```lang\n...\n```) — greedy so nested ``` don't break it
+        text = text.replace(/^```[\w]*\n([\s\S]*)\n```\s*$/, '$1').trim();
+        // Strip single-backtick wrapping (`entire response`)
+        text = text.replace(/^`([^`]+)`$/, '$1').trim();
+      }
       logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
       if (text) {
         await channel.sendMessage(chatJid, text);
