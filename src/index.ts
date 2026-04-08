@@ -77,6 +77,9 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+// Per-chat flag: true while the agent is actively thinking, false when idle-waiting.
+// Used by the typing heartbeat to avoid pulsing "typing..." after the bot has replied.
+const agentWorking = new Map<string, boolean>();
 
 const onecli = new OneCLI({ url: ONECLI_URL });
 
@@ -274,10 +277,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   // Typing heartbeat — re-send every 8s so Discord doesn't expire the indicator.
-  // No time cap needed: the container's hard timeout guarantees the process
-  // will exit, which resolves runAgent, which hits the finally block.
+  // Only pulses while the agent is actively working (not idle-waiting for input).
+  agentWorking.set(chatJid, true);
   const TYPING_INTERVAL_MS = 8_000;
   const typingInterval = setInterval(() => {
+    if (!agentWorking.get(chatJid)) return;
     channel
       .setTyping?.(chatJid, true)
       ?.catch((err) =>
@@ -321,15 +325,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
 
       if (result.status === 'success') {
+        agentWorking.set(chatJid, false);
         queue.notifyIdle(chatJid);
       }
 
       if (result.status === 'error') {
+        agentWorking.set(chatJid, false);
         hadError = true;
       }
     });
   } finally {
     clearInterval(typingInterval);
+    agentWorking.delete(chatJid);
     if (idleTimer) clearTimeout(idleTimer);
   }
 
@@ -537,6 +544,13 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
+            // Resume typing heartbeat — agent is working again on the piped message
+            agentWorking.set(chatJid, true);
+            channel
+              .setTyping?.(chatJid, true)
+              ?.catch((err) =>
+                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
+              );
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
