@@ -273,50 +273,65 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
+  // Typing heartbeat — re-send every 8s so Discord doesn't expire the indicator.
+  // No time cap needed: the container's hard timeout guarantees the process
+  // will exit, which resolves runAgent, which hits the finally block.
+  const TYPING_INTERVAL_MS = 8_000;
+  const typingInterval = setInterval(() => {
+    channel
+      .setTyping?.(chatJid, true)
+      ?.catch((err) =>
+        logger.debug({ chatJid, err }, 'Typing heartbeat failed'),
+      );
+  }, TYPING_INTERVAL_MS);
+
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      let text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      // Codex cleanup: strip echoed "Sent:" prefix and unwrap code-block wrapping
-      if (group.agentType === 'codex') {
-        text = text
-          .replace(/^Sent:\s*/i, '')
-          .replace(/^Sent\s+/i, '')
-          .trim();
-        // Strip triple-backtick wrapping (```lang\n...\n```) — greedy so nested ``` don't break it
-        text = text.replace(/^```[\w]*\n([\s\S]*)\n```\s*$/, '$1').trim();
-        // Strip single-backtick wrapping (`entire response`)
-        text = text.replace(/^`([^`]+)`$/, '$1').trim();
+  let output: 'success' | 'error';
+  try {
+    output = await runAgent(group, prompt, chatJid, async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        let text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        // Codex cleanup: strip echoed "Sent:" prefix and unwrap code-block wrapping
+        if (group.agentType === 'codex') {
+          text = text
+            .replace(/^Sent:\s*/i, '')
+            .replace(/^Sent\s+/i, '')
+            .trim();
+          // Strip triple-backtick wrapping (```lang\n...\n```) — greedy so nested ``` don't break it
+          text = text.replace(/^```[\w]*\n([\s\S]*)\n```\s*$/, '$1').trim();
+          // Strip single-backtick wrapping (`entire response`)
+          text = text.replace(/^`([^`]+)`$/, '$1').trim();
+        }
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
-
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
-
-  await channel.setTyping?.(chatJid, false);
-  if (idleTimer) clearTimeout(idleTimer);
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    });
+  } finally {
+    clearInterval(typingInterval);
+    if (idleTimer) clearTimeout(idleTimer);
+  }
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -522,12 +537,6 @@ async function startMessageLoop(): Promise<void> {
             lastAgentTimestamp[chatJid] =
               messagesToSend[messagesToSend.length - 1].timestamp;
             saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
           } else {
             // No active container — enqueue for a new one
             queue.enqueueMessageCheck(chatJid);
