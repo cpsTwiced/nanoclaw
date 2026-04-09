@@ -43,6 +43,7 @@ export interface RegisteredGroup {
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
   agentType?: AgentType; // Default: 'claude-code'
+  botConversationLimit?: number; // undefined = use global default, 0 = disable bot-to-bot
 }
 
 export interface NewMessage {

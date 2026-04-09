@@ -532,13 +532,40 @@ export async function processTaskIpc(
         );
         break;
       }
-      if (typeof data.limit === 'number' && data.limit >= 1) {
-        setBotConversationLimit(data.limit);
-        logger.info({ limit: data.limit }, 'Bot conversation limit updated');
-      } else {
+      if (typeof data.limit !== 'number' || data.limit < 0) {
         logger.warn(
           { data },
-          'Invalid set_bot_conversation_limit request - limit must be a number >= 1',
+          'Invalid set_bot_conversation_limit request - limit must be a number >= 0',
+        );
+        break;
+      }
+      if (data.chatJid && typeof data.chatJid === 'string') {
+        // Per-group limit (0 = disable bot-to-bot)
+        const groups = deps.registeredGroups();
+        const group = groups[data.chatJid];
+        if (!group) {
+          logger.warn(
+            { chatJid: data.chatJid },
+            'set_bot_conversation_limit: group not found',
+          );
+          break;
+        }
+        group.botConversationLimit = data.limit === 0 ? 0 : data.limit;
+        deps.registerGroup(data.chatJid, group);
+        logger.info(
+          { chatJid: data.chatJid, limit: data.limit },
+          'Per-group bot conversation limit updated',
+        );
+      } else {
+        // Global default (must be >= 1)
+        if (data.limit < 1) {
+          logger.warn({ data }, 'Global bot conversation limit must be >= 1');
+          break;
+        }
+        setBotConversationLimit(data.limit);
+        logger.info(
+          { limit: data.limit },
+          'Global bot conversation limit updated',
         );
       }
       break;

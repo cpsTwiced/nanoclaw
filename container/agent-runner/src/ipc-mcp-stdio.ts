@@ -610,6 +610,61 @@ server.tool(
 );
 
 server.tool(
+  'set_bot_conversation_limit',
+  `Set the bot-to-bot conversation turn limit. Main group only.
+
+When chat_jid is provided, sets the limit for that specific group (0 = disable bot-to-bot conversation entirely).
+When chat_jid is omitted, sets the global default (must be >= 1).`,
+  {
+    limit: z
+      .number()
+      .describe(
+        'The turn limit. Per-group: 0 to disable, or a positive number. Global: must be >= 1.',
+      ),
+    chat_jid: z
+      .string()
+      .optional()
+      .describe(
+        'Optional: the chat JID to set the limit for. Omit to set the global default.',
+      ),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Only the main group can set bot conversation limits.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'set_bot_conversation_limit',
+      limit: args.limit,
+      chatJid: args.chat_jid,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(TASKS_DIR, data);
+
+    const target = args.chat_jid
+      ? `group "${args.chat_jid}"`
+      : 'global default';
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: `Bot conversation limit set to ${args.limit} for ${target}.`,
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
   'register_group',
   `Register a new chat/group so the agent can respond to messages there. Main group only.
 

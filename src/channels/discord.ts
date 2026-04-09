@@ -10,6 +10,7 @@ import {
   ASSISTANT_NAME,
   CODEX_ASSISTANT_NAME,
   botConversationLimit,
+  escapeRegex,
 } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
@@ -37,6 +38,8 @@ export class DiscordChannel implements Channel {
   private triggerName: string;
   // Bot-to-bot turn counter per channel (reset on human message)
   private botTurnCounts = new Map<string, number>();
+  // Static registry: triggerName → Discord bot user ID (shared across instances)
+  private static botRegistry = new Map<string, string>();
 
   constructor(
     botToken: string,
@@ -68,11 +71,12 @@ export class DiscordChannel implements Channel {
       if (isOwnMessage) return;
 
       const channelId = message.channelId;
+      const chatJid = `${this.jidPrefix}${channelId}`;
+      const botId = this.client?.user?.id;
 
       // Bot-to-bot turn tracking
       if (message.author.bot) {
         // Only allow bot messages that @mention this bot
-        const botId = this.client?.user?.id;
         if (!botId) return;
         const mentionsMe =
           message.mentions.users.has(botId) ||
@@ -80,11 +84,14 @@ export class DiscordChannel implements Channel {
           message.content.includes(`<@!${botId}>`);
         if (!mentionsMe) return;
 
-        // Check turn cap
+        // Check per-group turn cap (fall back to global default)
+        const group = this.opts.registeredGroups()[chatJid];
+        const limit = group?.botConversationLimit ?? botConversationLimit;
+        if (limit === 0) return; // bot-to-bot disabled for this group
         const turns = this.botTurnCounts.get(channelId) || 0;
-        if (turns >= botConversationLimit) {
+        if (turns >= limit) {
           logger.info(
-            { channelId, turns, limit: botConversationLimit },
+            { channelId, turns, limit },
             'Bot-to-bot conversation limit reached, ignoring',
           );
           return;
@@ -93,9 +100,28 @@ export class DiscordChannel implements Channel {
       } else {
         // Human message resets the counter
         this.botTurnCounts.set(channelId, 0);
+
+        // Filter messages targeting other bots (not this one)
+        // Layer A: Discord native @mentions
+        const mentionedBots = message.mentions.users.filter((u) => u.bot);
+        if (mentionedBots.size > 0 && botId && !mentionedBots.has(botId)) {
+          return;
+        }
+
+        // Layer B: Plain text trigger prefixes (for trigger-exempt bypass)
+        const rawContent = message.content.trim();
+        for (const [triggerName] of DiscordChannel.botRegistry) {
+          if (triggerName === this.triggerName) continue;
+          const otherTrigger = new RegExp(
+            `^@${escapeRegex(triggerName)}\\b`,
+            'i',
+          );
+          if (otherTrigger.test(rawContent)) {
+            return;
+          }
+        }
       }
 
-      const chatJid = `${this.jidPrefix}${channelId}`;
       let content = message.content;
       const timestamp = message.createdAt.toISOString();
       const senderName =
@@ -224,6 +250,7 @@ export class DiscordChannel implements Channel {
 
     return new Promise<void>((resolve) => {
       this.client!.once(Events.ClientReady, (readyClient) => {
+        DiscordChannel.botRegistry.set(this.triggerName, readyClient.user.id);
         logger.info(
           { username: readyClient.user.tag, id: readyClient.user.id },
           'Discord bot connected',
@@ -256,6 +283,29 @@ export class DiscordChannel implements Channel {
 
       const textChannel = channel as TextChannel;
 
+      // Strip self-mentions to prevent self-triggering
+      const selfPattern = new RegExp(
+        `@${escapeRegex(this.triggerName)}\\b`,
+        'gi',
+      );
+      text = text.replace(selfPattern, '').trim();
+      const botId = this.client?.user?.id;
+      if (botId) {
+        text = text.replace(new RegExp(`<@!?${botId}>`, 'g'), '').trim();
+      }
+
+      // Convert other bot trigger mentions to Discord <@id> mentions
+      for (const [triggerName, userId] of DiscordChannel.botRegistry) {
+        if (triggerName === this.triggerName) continue;
+        const otherPattern = new RegExp(
+          `@${escapeRegex(triggerName)}\\b`,
+          'gi',
+        );
+        text = text.replace(otherPattern, `<@${userId}>`);
+      }
+
+      if (!text) return; // Nothing left after stripping
+
       // Discord has a 2000 character limit per message — split if needed
       const MAX_LENGTH = 2000;
       if (text.length <= MAX_LENGTH) {
@@ -281,6 +331,7 @@ export class DiscordChannel implements Channel {
 
   async disconnect(): Promise<void> {
     if (this.client) {
+      DiscordChannel.botRegistry.delete(this.triggerName);
       this.client.destroy();
       this.client = null;
       logger.info('Discord bot stopped');
