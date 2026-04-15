@@ -5,11 +5,12 @@
  */
 import { ChildProcess, execSync, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
 
-import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZONE } from './config.js';
+import { CODEX_EFFORT, CODEX_MODEL, CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZONE } from './config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
@@ -210,6 +211,20 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
     }
   }
 
+  // Codex auth: copy ~/.codex/auth.json into session dir and mount
+  const agentProvider = agentGroup.agent_provider || 'claude';
+  if (agentProvider === 'codex') {
+    const hostCodexAuth = path.join(os.homedir(), '.codex', 'auth.json');
+    const sessionCodexDir = path.join(sessDir, '.codex');
+    fs.mkdirSync(sessionCodexDir, { recursive: true });
+    if (fs.existsSync(hostCodexAuth)) {
+      fs.copyFileSync(hostCodexAuth, path.join(sessionCodexDir, 'auth.json'));
+    } else {
+      log.warn('Codex auth.json not found at ~/.codex/auth.json — run `codex login` on the host');
+    }
+    mounts.push({ hostPath: sessionCodexDir, containerPath: '/home/node/.codex', readonly: false });
+  }
+
   // Additional mounts from container config
   const containerConfig = agentGroup.container_config ? JSON.parse(agentGroup.container_config) : {};
   if (containerConfig.additionalMounts) {
@@ -254,6 +269,15 @@ async function buildContainerArgs(
   args.push('-e', `NANOCLAW_AGENT_GROUP_ID=${agentGroup.id}`);
   args.push('-e', `NANOCLAW_AGENT_GROUP_NAME=${agentGroup.name}`);
   args.push('-e', `NANOCLAW_IS_ADMIN=${agentGroup.is_admin ? '1' : '0'}`);
+
+  // Codex-specific environment variables
+  const resolvedProvider = session.agent_provider || agentGroup.agent_provider || 'claude';
+  if (resolvedProvider === 'codex') {
+    args.push('-e', 'CODEX_HOME=/home/node/.codex');
+    args.push('-e', 'NODE_PATH=/usr/local/lib/node_modules');
+    if (CODEX_MODEL) args.push('-e', `CODEX_MODEL=${CODEX_MODEL}`);
+    if (CODEX_EFFORT) args.push('-e', `CODEX_EFFORT=${CODEX_EFFORT}`);
+  }
 
   // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
   // are routed through the agent vault for credential injection.

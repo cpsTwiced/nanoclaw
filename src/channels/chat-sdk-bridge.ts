@@ -65,6 +65,15 @@ export interface ChatSdkBridgeConfig {
    * quirk (e.g. Telegram's legacy Markdown parse mode).
    */
   transformOutboundText?: (text: string) => string;
+  /**
+   * Optional transform applied to inbound serialized content before it is
+   * stored. Receives the serialized message and the raw platform payload.
+   * Use to resolve platform-specific tokens (e.g. Discord `<@userId>` mentions).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  transformInboundContent?: (serialized: Record<string, any>, raw: Record<string, any>) => void;
+  /** Override the channel type used for registry keying and identification. Defaults to adapter.name. */
+  channelType?: string;
 }
 
 export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter {
@@ -121,6 +130,12 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
       if (replyTo) serialized.replyTo = replyTo;
     }
 
+    // Resolve platform-specific tokens (e.g. Discord mentions) before dropping raw
+    if (config.transformInboundContent && message.raw) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      config.transformInboundContent(serialized, message.raw as Record<string, any>);
+    }
+
     // Drop raw to save DB space (can be very large)
     serialized.raw = undefined;
 
@@ -133,15 +148,15 @@ export function createChatSdkBridge(config: ChatSdkBridgeConfig): ChannelAdapter
   }
 
   return {
-    name: adapter.name,
-    channelType: adapter.name,
+    name: config.channelType || adapter.name,
+    channelType: config.channelType || adapter.name,
     supportsThreads: config.supportsThreads,
 
     async setup(hostConfig: ChannelSetup) {
       setupConfig = hostConfig;
       conversations = buildConversationMap(hostConfig.conversations);
 
-      state = new SqliteStateAdapter();
+      state = new SqliteStateAdapter(config.channelType || adapter.name);
 
       chat = new Chat({
         adapters: { [adapter.name]: adapter },

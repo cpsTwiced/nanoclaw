@@ -31,7 +31,12 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install agent-browser and claude-code globally
-RUN npm install -g agent-browser @anthropic-ai/claude-code
+RUN npm install -g agent-browser @anthropic-ai/claude-code @openai/codex && \
+    mkdir -p /usr/local/lib/node_modules/@openai/codex-linux-arm64 && \
+    cd /usr/local/lib/node_modules/@openai/codex-linux-arm64 && \
+    npm pack @openai/codex@0.120.0-linux-arm64 --pack-destination . && \
+    tar xzf *.tgz --strip-components=1 && \
+    rm *.tgz
 
 # Create app directory
 WORKDIR /app
