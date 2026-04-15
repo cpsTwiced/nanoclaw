@@ -10,7 +10,16 @@ import path from 'path';
 
 import { OneCLI } from '@onecli-sh/sdk';
 
-import { CODEX_EFFORT, CODEX_MODEL, CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZONE } from './config.js';
+import {
+  CODEX_EFFORT,
+  CODEX_MODEL,
+  CONTAINER_IMAGE,
+  DATA_DIR,
+  GROUPS_DIR,
+  IDLE_TIMEOUT,
+  ONECLI_URL,
+  TIMEZONE,
+} from './config.js';
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
