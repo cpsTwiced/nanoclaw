@@ -13,6 +13,7 @@ import { CONTAINER_IMAGE, DATA_DIR, GROUPS_DIR, IDLE_TIMEOUT, ONECLI_URL, TIMEZO
 import { CONTAINER_RUNTIME_BIN, hostGatewayArgs, readonlyMountArgs, stopContainer } from './container-runtime.js';
 import { getAgentGroup } from './db/agent-groups.js';
 import { getMessagingGroup } from './db/messaging-groups.js';
+import { stopTypingForSession } from './delivery.js';
 import { initGroupFilesystem } from './group-init.js';
 import { log } from './log.js';
 import { validateAdditionalMounts } from './mount-security.js';
@@ -134,6 +135,7 @@ async function spawnContainer(session: Session): Promise<void> {
     clearTimeout(idleTimer);
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
+    stopTypingForSession(session.id);
     log.info('Container exited', { sessionId: session.id, code, containerName });
   });
 
@@ -141,6 +143,7 @@ async function spawnContainer(session: Session): Promise<void> {
     clearTimeout(idleTimer);
     activeContainers.delete(session.id);
     markContainerStopped(session.id);
+    stopTypingForSession(session.id);
     log.error('Container spawn error', { sessionId: session.id, err });
   });
 }

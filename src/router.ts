@@ -121,7 +121,7 @@ export async function routeInbound(event: InboundEvent): Promise<void> {
   });
 
   // 5. Show typing indicator while agent processes
-  triggerTyping(event.channelType, event.platformId, event.threadId);
+  triggerTyping(session, event.channelType, event.platformId, event.threadId);
 
   // 6. Wake container
   const freshSession = getSession(session.id);

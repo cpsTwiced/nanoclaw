@@ -237,6 +237,13 @@ export function getStuckProcessingIds(outDb: Database.Database): string[] {
   ).map((r) => r.message_id);
 }
 
+export function hasActiveProcessing(outDb: Database.Database): boolean {
+  const row = outDb.prepare("SELECT 1 AS one FROM processing_ack WHERE status = 'processing' LIMIT 1").get() as
+    | { one: number }
+    | undefined;
+  return row !== undefined;
+}
+
 // ---------------------------------------------------------------------------
 // messages_out (read-only from host)
 // ---------------------------------------------------------------------------

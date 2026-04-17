@@ -38,6 +38,7 @@ import {
   cancelTask,
   pauseTask,
   resumeTask,
+  hasActiveProcessing,
 } from './db/session-db.js';
 import { log } from './log.js';
 import { normalizeOptions, type RawOption } from './channels/ask-question.js';
@@ -60,8 +61,34 @@ const ACTIVE_POLL_MS = 1000;
 const SWEEP_POLL_MS = 60_000;
 const MAX_DELIVERY_ATTEMPTS = 3;
 
+// Typing indicator heartbeat. Discord expires "typing..." at ~10s, so we re-send
+// every 8s while the agent is working. v1 used a per-chat boolean flag; v2 uses
+// the container-owned processing_ack table as the working/idle signal, with a
+// grace period to cover container spawn + first-query startup.
+const TYPING_INTERVAL_MS = 8_000;
+const TYPING_GRACE_MS = 15_000;
+const TYPING_MAX_DURATION_MS = 15 * 60_000;
+
 /** Track delivery attempt counts. Resets on process restart (gives failed messages a fresh chance). */
 const deliveryAttempts = new Map<string, number>();
+
+interface TypingState {
+  agentGroupId: string;
+  sessionId: string;
+  channelType: string;
+  platformId: string;
+  threadId: string | null;
+  startedAt: number;
+  lastPulseAt: number;
+}
+
+// Keyed by sessionId + channel tuple so agent-shared sessions spanning multiple
+// threads each get their own typing lifecycle.
+const typingStates = new Map<string, TypingState>();
+
+function typingKey(sessionId: string, channelType: string, platformId: string, threadId: string | null): string {
+  return `${sessionId}:${channelType}:${platformId}:${threadId ?? ''}`;
+}
 
 export interface ChannelDeliveryAdapter {
   deliver(
@@ -170,12 +197,96 @@ async function requestApproval(
   log.info('Approval requested', { action, approvalId, agentName });
 }
 
-/** Show typing indicator on a channel. Called when a message is routed to the agent. */
-export async function triggerTyping(channelType: string, platformId: string, threadId: string | null): Promise<void> {
-  try {
-    await deliveryAdapter?.setTyping?.(channelType, platformId, threadId);
-  } catch {
-    // Typing is best-effort — don't fail routing if it errors
+/**
+ * Start a persistent typing indicator for a session. Fires immediately and
+ * records state; `pollActive` re-pulses every TYPING_INTERVAL_MS while the
+ * container has active processing_ack rows (or during the startup grace
+ * period). Stops when the agent goes idle, the container exits, or the
+ * safety cap is reached.
+ */
+export function triggerTyping(
+  session: Session,
+  channelType: string,
+  platformId: string,
+  threadId: string | null,
+): void {
+  const key = typingKey(session.id, channelType, platformId, threadId);
+  const now = Date.now();
+  const existing = typingStates.get(key);
+  if (existing) {
+    // Same channel+thread already being pulsed — refresh startedAt so a new
+    // inbound message resets the grace period and the safety cap.
+    existing.startedAt = now;
+  } else {
+    typingStates.set(key, {
+      agentGroupId: session.agent_group_id,
+      sessionId: session.id,
+      channelType,
+      platformId,
+      threadId,
+      startedAt: now,
+      lastPulseAt: now,
+    });
+  }
+
+  // Fire one immediate pulse so the user sees typing without waiting for the
+  // next pollActive tick.
+  pulseTyping(channelType, platformId, threadId);
+}
+
+function pulseTyping(channelType: string, platformId: string, threadId: string | null): void {
+  const adapter = deliveryAdapter;
+  if (!adapter?.setTyping) return;
+  // Fire-and-forget — typing is best-effort and must never block delivery.
+  adapter.setTyping(channelType, platformId, threadId).catch((err) => {
+    log.debug('Typing pulse failed', { channelType, platformId, threadId, err });
+  });
+}
+
+/** Clear all typing state for a session — called on container close/error. */
+export function stopTypingForSession(sessionId: string): void {
+  for (const key of typingStates.keys()) {
+    if (key.startsWith(`${sessionId}:`)) typingStates.delete(key);
+  }
+}
+
+/**
+ * Re-pulse typing indicators for a session if due. Called from pollActive
+ * while iterating running sessions — piggybacks on the outbound.db connection
+ * so we don't open it twice.
+ */
+function tickTypingForSession(session: Session, outDb: Database.Database): void {
+  const now = Date.now();
+  let processingChecked = false;
+  let hasProcessing = false;
+
+  for (const [key, state] of typingStates) {
+    if (state.sessionId !== session.id) continue;
+
+    if (now - state.startedAt > TYPING_MAX_DURATION_MS) {
+      typingStates.delete(key);
+      continue;
+    }
+    if (now - state.lastPulseAt < TYPING_INTERVAL_MS) continue;
+
+    // Lazy single-query check per session per tick.
+    if (!processingChecked) {
+      try {
+        hasProcessing = hasActiveProcessing(outDb);
+      } catch {
+        hasProcessing = false;
+      }
+      processingChecked = true;
+    }
+
+    const inGrace = now - state.startedAt < TYPING_GRACE_MS;
+    if (!hasProcessing && !inGrace) {
+      typingStates.delete(key);
+      continue;
+    }
+
+    pulseTyping(state.channelType, state.platformId, state.threadId);
+    state.lastPulseAt = now;
   }
 }
 
@@ -237,6 +348,10 @@ async function deliverSessionMessages(session: Session): Promise<void> {
   }
 
   try {
+    // Re-pulse typing indicators before delivery so heartbeat keeps firing
+    // even when there are no outbound messages to deliver this tick.
+    tickTypingForSession(session, outDb);
+
     // Read all due messages from outbound.db (read-only)
     const allDue = getDueOutboundMessages(outDb);
     if (allDue.length === 0) return;
@@ -698,4 +813,12 @@ async function handleSystemAction(
 export function stopDeliveryPolls(): void {
   activePolling = false;
   sweepPolling = false;
+  typingStates.clear();
 }
+
+// Test-only exports — not part of the public API.
+export const __testing = {
+  tickTypingForSession,
+  typingStates,
+  constants: { TYPING_INTERVAL_MS, TYPING_GRACE_MS, TYPING_MAX_DURATION_MS },
+};
