@@ -11,6 +11,8 @@ import path from 'path';
 import { OneCLI } from '@onecli-sh/sdk';
 
 import {
+  CLAUDE_EFFORT,
+  CLAUDE_MODEL,
   CODEX_EFFORT,
   CODEX_MODEL,
   CONTAINER_IMAGE,
@@ -287,6 +289,8 @@ async function buildContainerArgs(
     if (CODEX_MODEL) args.push('-e', `CODEX_MODEL=${CODEX_MODEL}`);
     if (CODEX_EFFORT) args.push('-e', `CODEX_EFFORT=${CODEX_EFFORT}`);
   }
+  if (CLAUDE_MODEL) args.push('-e', `CLAUDE_MODEL=${CLAUDE_MODEL}`);
+  if (CLAUDE_EFFORT) args.push('-e', `CLAUDE_EFFORT=${CLAUDE_EFFORT}`);
 
   // OneCLI gateway — injects HTTPS_PROXY + certs so container API calls
   // are routed through the agent vault for credential injection.

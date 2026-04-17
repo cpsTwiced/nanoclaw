@@ -216,6 +216,8 @@ export class ClaudeProvider implements AgentProvider {
         allowDangerouslySkipPermissions: true,
         settingSources: ['project', 'user'],
         mcpServers: this.mcpServers,
+        model: process.env.CLAUDE_MODEL || undefined,
+        effort: (process.env.CLAUDE_EFFORT as 'low' | 'medium' | 'high' | 'max' | undefined) || undefined,
         hooks: {
           PreCompact: [{ hooks: [createPreCompactHook(this.assistantName)] }],
         },

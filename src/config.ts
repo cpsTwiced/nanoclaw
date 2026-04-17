@@ -12,6 +12,8 @@ const envConfig = readEnvFile([
   'TZ',
   'CODEX_MODEL',
   'CODEX_EFFORT',
+  'CLAUDE_MODEL',
+  'CLAUDE_EFFORT',
 ]);
 
 export const ASSISTANT_NAME = process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
@@ -60,6 +62,10 @@ export const TRIGGER_PATTERN = buildTriggerPattern(DEFAULT_TRIGGER);
 // Codex CLI provider config
 export const CODEX_MODEL = process.env.CODEX_MODEL || envConfig.CODEX_MODEL;
 export const CODEX_EFFORT = process.env.CODEX_EFFORT || envConfig.CODEX_EFFORT;
+
+// Claude Agent SDK provider config
+export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || envConfig.CLAUDE_MODEL;
+export const CLAUDE_EFFORT = process.env.CLAUDE_EFFORT || envConfig.CLAUDE_EFFORT;
 
 // Timezone for scheduled tasks, message formatting, etc.
 // Validates each candidate is a real IANA identifier before accepting.
