@@ -32,9 +32,11 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser @anthropic-ai/claude-code @openai/codex && \
-    mkdir -p /usr/local/lib/node_modules/@openai/codex-linux-arm64 && \
-    cd /usr/local/lib/node_modules/@openai/codex-linux-arm64 && \
-    npm pack @openai/codex@0.120.0-linux-arm64 --pack-destination . && \
+    ARCH=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/x64/') && \
+    CODEX_VERSION=$(node -e "console.log(JSON.parse(require('fs').readFileSync('/usr/local/lib/node_modules/@openai/codex/package.json','utf8')).version)") && \
+    mkdir -p /usr/local/lib/node_modules/@openai/codex-linux-${ARCH} && \
+    cd /usr/local/lib/node_modules/@openai/codex-linux-${ARCH} && \
+    npm pack @openai/codex@${CODEX_VERSION}-linux-${ARCH} --pack-destination . && \
     tar xzf *.tgz --strip-components=1 && \
     rm *.tgz
 

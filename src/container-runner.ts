@@ -227,7 +227,11 @@ function buildMounts(agentGroup: AgentGroup, session: Session): VolumeMount[] {
     const sessionCodexDir = path.join(sessDir, '.codex');
     fs.mkdirSync(sessionCodexDir, { recursive: true });
     if (fs.existsSync(hostCodexAuth)) {
-      fs.copyFileSync(hostCodexAuth, path.join(sessionCodexDir, 'auth.json'));
+      try {
+        fs.copyFileSync(hostCodexAuth, path.join(sessionCodexDir, 'auth.json'));
+      } catch (err) {
+        log.warn('Failed to copy Codex auth.json — check permissions', { err });
+      }
     } else {
       log.warn('Codex auth.json not found at ~/.codex/auth.json — run `codex login` on the host');
     }

@@ -28,7 +28,10 @@ class EventQueue {
   private done = false;
 
   push(event: ProviderEvent): void {
-    if (this.done) return;
+    if (this.done) {
+      log(`EventQueue: dropped ${event.type} event after close`);
+      return;
+    }
     this.queue.push(event);
     this.waiting?.();
   }
@@ -52,6 +55,18 @@ class EventQueue {
   }
 }
 
+/** Escape a string value for TOML basic strings (double-quoted). */
+function tomlEscape(s: string): string {
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t');
+}
+
+const TOML_BARE_KEY_RE = /^[A-Za-z0-9_-]+$/;
+
 // Match errors from thread resume failures
 const STALE_SESSION_RE = /thread.*not found|invalid thread|unknown thread|no such thread/i;
 
@@ -67,6 +82,11 @@ function resolveImports(content: string, baseDir: string): string {
     const match = line.match(/^@(.+)$/);
     if (match) {
       const importPath = path.resolve(baseDir, match[1].trim());
+      if (!importPath.startsWith(baseDir + path.sep) && importPath !== baseDir) {
+        log(`Import path traversal blocked: ${match[1].trim()}`);
+        resolved.push(line);
+        continue;
+      }
       if (fs.existsSync(importPath)) {
         resolved.push(fs.readFileSync(importPath, 'utf-8'));
       } else {
@@ -322,14 +342,23 @@ export class CodexProvider implements AgentProvider {
 
     const tomlLines: string[] = [];
     for (const [name, config] of Object.entries(this.mcpServers)) {
+      if (!TOML_BARE_KEY_RE.test(name)) {
+        log(`Skipping MCP server with invalid TOML key name: "${name}"`);
+        continue;
+      }
       tomlLines.push(`[mcp_servers.${name}]`);
-      tomlLines.push(`command = "${config.command}"`);
-      tomlLines.push(`args = ${JSON.stringify(config.args)}`);
+      tomlLines.push(`command = "${tomlEscape(config.command)}"`);
+      const escapedArgs = config.args.map((a) => `"${tomlEscape(a)}"`).join(', ');
+      tomlLines.push(`args = [${escapedArgs}]`);
       tomlLines.push('');
       if (Object.keys(config.env).length > 0) {
         tomlLines.push(`[mcp_servers.${name}.env]`);
         for (const [k, v] of Object.entries(config.env)) {
-          tomlLines.push(`${k} = "${v}"`);
+          if (!TOML_BARE_KEY_RE.test(k)) {
+            log(`Skipping env key with invalid TOML key name: "${k}"`);
+            continue;
+          }
+          tomlLines.push(`${k} = "${tomlEscape(v)}"`);
         }
         tomlLines.push('');
       }
