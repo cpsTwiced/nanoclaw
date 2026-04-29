@@ -30,9 +30,12 @@ export interface PollLoopConfig {
    */
   providerName: string;
   cwd: string;
-  systemContext?: {
-    instructions?: string;
-  };
+  /**
+   * Called fresh on every turn to (re)compute the system-prompt addendum.
+   * Lets per-group memory (CLAUDE.local.md) and live destinations changes
+   * propagate to the running container without a restart.
+   */
+  buildInstructions?: () => string;
 }
 
 /**
@@ -164,7 +167,7 @@ export async function runPollLoop(config: PollLoopConfig): Promise<void> {
       prompt,
       continuation,
       cwd: config.cwd,
-      systemContext: config.systemContext,
+      systemContext: config.buildInstructions ? { instructions: config.buildInstructions() } : undefined,
     });
 
     // Process the query while concurrently polling for new messages

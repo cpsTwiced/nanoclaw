@@ -45,13 +45,12 @@ async function main(): Promise<void> {
 
   log(`Starting v2 agent-runner (provider: ${providerName})`);
 
-  // Runtime-generated system-prompt addendum: agent identity (name) plus
-  // the live destinations map. Everything else (capabilities, per-module
-  // instructions, per-channel formatting) is loaded by Claude Code from
-  // /workspace/agent/CLAUDE.md — the composed entry imports the shared
-  // base (/app/CLAUDE.md) and each enabled module's fragment. Per-group
-  // memory lives in /workspace/agent/CLAUDE.local.md (auto-loaded).
-  const instructions = buildSystemPromptAddendum(config.assistantName || undefined);
+  // Runtime-generated system-prompt addendum: agent identity (name),
+  // the live destinations map, and the per-group CLAUDE.local.md content.
+  // Computed per-turn (not at startup) so edits to CLAUDE.local.md and
+  // changes to the destinations table take effect on the next message
+  // without requiring a container restart.
+  const buildInstructions = (): string => buildSystemPromptAddendum(config.assistantName || undefined);
 
   // Discover additional directories mounted at /workspace/extra/*
   const additionalDirectories: string[] = [];
@@ -97,7 +96,7 @@ async function main(): Promise<void> {
     provider,
     providerName,
     cwd: CWD,
-    systemContext: { instructions },
+    buildInstructions,
   });
 }
 
