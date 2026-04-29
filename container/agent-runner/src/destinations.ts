@@ -10,7 +10,20 @@
  * The host re-validates on the delivery side against the central DB,
  * so even if this table is stale the host's enforcement is authoritative.
  */
+import fs from 'fs';
+
 import { getInboundDb } from './db/connection.js';
+
+const CLAUDE_LOCAL_PATH = '/workspace/agent/CLAUDE.local.md';
+
+function readClaudeLocal(): string | null {
+  try {
+    const content = fs.readFileSync(CLAUDE_LOCAL_PATH, 'utf8').trim();
+    return content.length > 0 ? content : null;
+  } catch {
+    return null;
+  }
+}
 
 export interface DestinationEntry {
   name: string;
@@ -84,6 +97,14 @@ export function buildSystemPromptAddendum(assistantName?: string): string {
 
   if (assistantName) {
     sections.push(['# You are ' + assistantName, '', `Your name is **${assistantName}**. Use it when the channel asks who you are, when introducing yourself, and when signing any message that explicitly calls for a signature.`].join('\n'));
+  }
+
+  // Per-group instructions from CLAUDE.local.md. Injected here because Claude
+  // Code's @import chain in the composed CLAUDE.md does not reliably pull
+  // CLAUDE.local.md into the system prompt — read directly and append.
+  const claudeLocal = readClaudeLocal();
+  if (claudeLocal) {
+    sections.push(claudeLocal);
   }
 
   sections.push(buildDestinationsSection());
